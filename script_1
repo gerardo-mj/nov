@@ -1,0 +1,61 @@
+/* 5. Identificación de cambios de estado en clientes */
+
+-- Clientes sanos
+WITH ANTIGUO_CLI AS (
+    SELECT *
+    FROM nzvms.DC7801
+    WHERE DC7801_MORA_IRB = "N"
+),
+
+-- Clientes en default
+NUEVO_CLI AS (
+    SELECT *
+    FROM nzvms.DC7801
+    WHERE DC7801_MORA_IRB = "S"
+),
+
+-- Detecta las entradas en default a nivel de cliente (cambio de estado de sano a default)
+CAMBIOS_MOTIVO_CLIEN AS (
+    SELECT 
+        B.NUMIDEFISC AS ID_CLIEN,
+        B.DC7801_TIPPRODUCT AS TIP_CALCUL_DEFAULT,
+        A.DC7801_GRTIPRIE_IRB AS MOTIVO_ANTERIOR,
+        B.DC7801_GRTIPRIE_IRB AS MOTIVO_NUEVO,
+        B.DC7801_FECENT_MORA_IRB AS FECHA_CAMBIO_MOTIVO_CLI
+    FROM ANTIGUO_CLI A
+    INNER JOIN NUEVO_CLI B
+        ON A.NUMIDEFISC = B.NUMIDEFISC
+        AND INTNX('day', B.DC7801_FECENT_MORA_IRB, -1) = A.DC7801_FECSAL_MORA_IRB
+),
+
+-- Relaciona contratos en default con cambios de default recientes en sus clientes
+ESTADO_DEFAULT_NACIMIENTO AS (
+    SELECT 
+        A.ID_CONTR,
+        A.DC7801_SUBCONTRAT,
+        A.NUMIDEFISC AS ID_CLIEN,
+        A.DC7801_TIPPRODUCT AS TIP_CALCUL_DEFAULT,
+        A.DC7801_GRTIPRIE_IRB AS MOTIVO_DEFAULT,
+        A.DC7801_FECENT_DEFAULT_IRB AS FECHA_ORIGEN,
+        A.DC7801_MORA_IRB AS IND_DEFAULT_IRB,
+        B.FECHA_CAMBIO_MOTIVO_CLI,
+        ROW_NUMBER() OVER(PARTITION BY A.ID_CONTR, A.DC7801_SUBCONTRAT ORDER BY B.FECHA_CAMBIO_MOTIVO_CLI DESC) AS ROWNUM
+    FROM ESTADO_DEFAULT_NACIMIENTO A
+    LEFT JOIN CAMBIOS_MOTIVO_CLIEN B
+        ON A.NUMIDEFISC = B.ID_CLIEN
+        AND A.DC7801_FECENT_DEFAULT_IRB >= B.FECHA_CAMBIO_MOTIVO_CLI
+)
+
+-- Inserta contratos que nacen en default, con la fecha de entrada en default del cliente más reciente anterior a la fecha de origen del contrato
+proc sql;
+
+INSERT INTO MAESTRO_DEFAULT
+SELECT 
+    ID_CONTR,
+    DC7801_SUBCONTRAT,
+    TIP_CALCUL_DEFAULT,
+    MOTIVO_DEFAULT,
+    FECHA_ORIGEN AS FECHA_DEFAULT
+FROM ESTADO_DEFAULT_NACIMIENTO
+WHERE ROWNUM = 1 AND IND_DEFAULT_IRB = "S";
+QUIT;
